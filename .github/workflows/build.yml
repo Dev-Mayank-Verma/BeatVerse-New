@@ -1,142 +1,165 @@
 name: Build BeatVerse APK
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: read
+    branches: [ main ]
+  workflow_dispatch: {}
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Find ZIP
-        id: zip
-        shell: bash
-        run: |
-          set -e
-
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "❌ No ZIP file found."
-            exit 1
-          fi
-
-          echo "ZIP: $ZIP_FILE"
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Extract ZIP
-        run: |
-          set -e
-          rm -rf extracted
-          mkdir extracted
-
-          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
-
-      - name: Locate Flutter project
-        id: project
-        shell: bash
-        run: |
-          set -e
-
-          PUBSPEC=$(find extracted -type f -name "pubspec.yaml" | head -n 1)
-
-          if [ -z "$PUBSPEC" ]; then
-            echo "❌ pubspec.yaml not found."
-            find extracted -maxdepth 4 -type f
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$PUBSPEC")
-
-          echo "Flutter project:"
-          echo "$PROJECT_DIR"
-
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Copy project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
-
-          shopt -s dotglob nullglob
-
-          cp -R "$PROJECT_DIR"/* .
-
-          echo "Project copied:"
-          ls -la
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          path: repo
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/setup-java@v4
         with:
-          channel: stable
-          cache: true
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Flutter version
-        run: flutter --version
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
 
-      # IMPORTANT:
-      # Your ZIP does not contain an Android folder.
-      # This generates the Android project automatically.
-      - name: Generate Android project
-        shell: bash
+      - name: Scaffold
+        run: flutter create --platforms=android --org com.beatverse --project-name beatverse scaffold
+
+      - name: Copy source
         run: |
-          set -e
+          rm -rf scaffold/lib
+          cp -r repo/lib scaffold/lib
+          cp repo/pubspec.yaml scaffold/pubspec.yaml
 
-          if [ ! -d "android" ]; then
-            echo "⚠️ Android folder missing."
-            echo "📱 Generating Android platform..."
+      - name: Fix Kotlin + minSdk
+        run: |
+          python3 << 'PY'
+          import re
 
-            flutter create \
-              --platforms=android \
-              --project-name=beatverse \
-              .
+          # Fix Kotlin in settings.gradle
+          p = 'scaffold/android/settings.gradle'
+          t = open(p).read()
+          t = re.sub(
+            r'(id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+")[^"]+(")',
+            r'\g<1>1.9.24\2',
+            t
+          )
+          open(p, 'w').write(t)
+          print("settings.gradle done")
 
-          else
-            echo "✅ Android folder already exists."
-          fi
+          # Fix minSdk in app/build.gradle
+          p2 = 'scaffold/android/app/build.gradle'
+          t2 = open(p2).read()
+          print("ORIGINAL build.gradle:\n", t2)
 
-      - name: Get dependencies
+          # New format
+          t2 = re.sub(
+            r'minSdk\s*=\s*flutter\.minSdkVersion',
+            'minSdk = 21',
+            t2
+          )
+
+          # Old format
+          t2 = re.sub(
+            r'minSdkVersion\s+flutter\.minSdkVersion',
+            'minSdkVersion 21',
+            t2
+          )
+
+          # Any plain number
+          t2 = re.sub(
+            r'minSdkVersion\s+\d+',
+            'minSdkVersion 21',
+            t2
+          )
+
+          open(p2, 'w').write(t2)
+          print("FIXED build.gradle:\n", t2)
+          PY
+
+      - name: Write manifest
+        run: |
+          cat > scaffold/android/app/src/main/AndroidManifest.xml << 'XMLEOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
+
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+              <application
+                  android:label="BeatVerse"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:taskAffinity=""
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+
+                  </activity>
+
+                  <receiver
+                      android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                      </intent-filter>
+                  </receiver>
+
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2"/>
+
+              </application>
+          </manifest>
+          XMLEOF
+
+      - name: pub get
+        working-directory: scaffold
         run: flutter pub get
 
-      - name: Build Release APK
-        run: flutter build apk --release
-
-      - name: Verify APK
-        shell: bash
+      # FIX: flutter_inappwebview 5.8.0 uses the old
+      # proguard-android.txt which modern R8 rejects.
+      - name: Patch flutter_inappwebview
         run: |
-          set -e
+          WEBVIEW_GRADLE="$HOME/.pub-cache/hosted/pub.dev/flutter_inappwebview-5.8.0/android/build.gradle"
 
-          APK="build/app/outputs/flutter-apk/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "❌ APK not generated."
-            exit 1
+          if [ -f "$WEBVIEW_GRADLE" ]; then
+            echo "Patching flutter_inappwebview 5.8.0..."
+            sed -i 's/proguard-android\.txt/proguard-android-optimize.txt/g' "$WEBVIEW_GRADLE"
+            echo "Patch applied."
+          else
+            echo "flutter_inappwebview 5.8.0 build.gradle not found."
+            echo "Searching pub cache..."
+            find "$HOME/.pub-cache/hosted/pub.dev" \
+              -path "*/flutter_inappwebview*/android/build.gradle" \
+              -print
           fi
 
-          echo "✅ APK generated successfully!"
-          ls -lh "$APK"
+      - name: Build APK
+        working-directory: scaffold
+        run: flutter build apk --release
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: BeatVerse-release-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 30
+          name: beatverse-apk
+          path: scaffold/build/app/outputs/flutter-apk/app-release.apk
