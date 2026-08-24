@@ -1,0 +1,142 @@
+name: Build BeatVerse APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find ZIP
+        id: zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "❌ No ZIP file found."
+            exit 1
+          fi
+
+          echo "ZIP: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract ZIP
+        run: |
+          set -e
+          rm -rf extracted
+          mkdir extracted
+
+          unzip -o "${{ steps.zip.outputs.zip_file }}" -d extracted
+
+      - name: Locate Flutter project
+        id: project
+        shell: bash
+        run: |
+          set -e
+
+          PUBSPEC=$(find extracted -type f -name "pubspec.yaml" | head -n 1)
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "❌ pubspec.yaml not found."
+            find extracted -maxdepth 4 -type f
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PUBSPEC")
+
+          echo "Flutter project:"
+          echo "$PROJECT_DIR"
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Copy project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
+
+          shopt -s dotglob nullglob
+
+          cp -R "$PROJECT_DIR"/* .
+
+          echo "Project copied:"
+          ls -la
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      # IMPORTANT:
+      # Your ZIP does not contain an Android folder.
+      # This generates the Android project automatically.
+      - name: Generate Android project
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -d "android" ]; then
+            echo "⚠️ Android folder missing."
+            echo "📱 Generating Android platform..."
+
+            flutter create \
+              --platforms=android \
+              --project-name=beatverse \
+              .
+
+          else
+            echo "✅ Android folder already exists."
+          fi
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build Release APK
+        run: flutter build apk --release
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "❌ APK not generated."
+            exit 1
+          fi
+
+          echo "✅ APK generated successfully!"
+          ls -lh "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeatVerse-release-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
