@@ -11,8 +11,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: repo
 
       - uses: actions/setup-java@v4
         with:
@@ -30,8 +28,8 @@ jobs:
       - name: Copy source
         run: |
           rm -rf scaffold/lib
-          cp -r repo/lib scaffold/lib
-          cp repo/pubspec.yaml scaffold/pubspec.yaml
+          cp -r lib scaffold/lib
+          cp pubspec.yaml scaffold/pubspec.yaml
 
       - name: Fix Kotlin + minSdk
         run: |
@@ -42,41 +40,37 @@ jobs:
           p = 'scaffold/android/settings.gradle'
           t = open(p).read()
           t = re.sub(
-            r'(id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+")[^"]+(")',
-            r'\g<1>1.9.24\2',
-            t
+              r'(id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+")[^"]+(")',
+              r'\g<1>1.9.24\2',
+              t
           )
           open(p, 'w').write(t)
           print("settings.gradle done")
 
-          # Fix minSdk in app/build.gradle
+          # Fix minSdk
           p2 = 'scaffold/android/app/build.gradle'
           t2 = open(p2).read()
-          print("ORIGINAL build.gradle:\n", t2)
 
-          # New format
           t2 = re.sub(
-            r'minSdk\s*=\s*flutter\.minSdkVersion',
-            'minSdk = 21',
-            t2
+              r'minSdk\s*=\s*flutter\.minSdkVersion',
+              'minSdk = 21',
+              t2
           )
 
-          # Old format
           t2 = re.sub(
-            r'minSdkVersion\s+flutter\.minSdkVersion',
-            'minSdkVersion 21',
-            t2
+              r'minSdkVersion\s+flutter\.minSdkVersion',
+              'minSdkVersion 21',
+              t2
           )
 
-          # Any plain number
           t2 = re.sub(
-            r'minSdkVersion\s+\d+',
-            'minSdkVersion 21',
-            t2
+              r'minSdkVersion\s+\d+',
+              'minSdkVersion 21',
+              t2
           )
 
           open(p2, 'w').write(t2)
-          print("FIXED build.gradle:\n", t2)
+          print("minSdk fixed")
           PY
 
       - name: Write manifest
@@ -137,8 +131,6 @@ jobs:
         working-directory: scaffold
         run: flutter pub get
 
-      # FIX: flutter_inappwebview 5.8.0 uses the old
-      # proguard-android.txt which modern R8 rejects.
       - name: Patch flutter_inappwebview
         run: |
           WEBVIEW_GRADLE="$HOME/.pub-cache/hosted/pub.dev/flutter_inappwebview-5.8.0/android/build.gradle"
@@ -146,10 +138,9 @@ jobs:
           if [ -f "$WEBVIEW_GRADLE" ]; then
             echo "Patching flutter_inappwebview 5.8.0..."
             sed -i 's/proguard-android\.txt/proguard-android-optimize.txt/g' "$WEBVIEW_GRADLE"
-            echo "Patch applied."
+            echo "flutter_inappwebview patch applied."
           else
-            echo "flutter_inappwebview 5.8.0 build.gradle not found."
-            echo "Searching pub cache..."
+            echo "flutter_inappwebview 5.8.0 not found."
             find "$HOME/.pub-cache/hosted/pub.dev" \
               -path "*/flutter_inappwebview*/android/build.gradle" \
               -print
