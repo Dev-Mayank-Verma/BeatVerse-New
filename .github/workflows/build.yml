@@ -1,0 +1,136 @@
+name: Build BeatVerse APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find BeatVerse ZIP
+        id: find_zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 2 -type f \
+            \( -iname "*.zip" \) \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "❌ No ZIP file found."
+            exit 1
+          fi
+
+          echo "ZIP found: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Flutter project
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p extracted
+
+          unzip -o "${{ steps.find_zip.outputs.zip_file }}" \
+            -d extracted
+
+          echo "📦 ZIP extracted."
+
+      - name: Locate Flutter project
+        id: flutter_project
+        shell: bash
+        run: |
+          set -e
+
+          PUBSPEC=$(find extracted -type f -name "pubspec.yaml" | head -n 1)
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "❌ pubspec.yaml not found inside ZIP."
+            echo "ZIP contents:"
+            find extracted -maxdepth 4 -type f | head -n 200
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PUBSPEC")
+
+          echo "Flutter project found at:"
+          echo "$PROJECT_DIR"
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Copy Flutter project to workspace
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR="${{ steps.flutter_project.outputs.project_dir }}"
+
+          shopt -s dotglob nullglob
+
+          cp -R "$PROJECT_DIR"/* .
+
+          echo "📁 Flutter project copied."
+
+          ls -la
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze project
+        run: flutter analyze
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Check APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "❌ APK was not generated."
+            exit 1
+          fi
+
+          echo "✅ APK successfully generated:"
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeatVerse-release-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
