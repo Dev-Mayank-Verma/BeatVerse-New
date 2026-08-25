@@ -31,18 +31,8 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-            -maxdepth 2 \
-            -type f \
-            -iname 'BeatVerse*.zip' \
-            -print -quit)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::BeatVerse ZIP not found"
-            exit 1
-          fi
-
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname 'BeatVerse*.zip' -print -quit)"
+          [ -z "$ZIP_FILE" ] && { echo "::error::BeatVerse ZIP not found"; exit 1; }
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
           echo "Using: $ZIP_FILE"
 
@@ -50,37 +40,19 @@ jobs:
         shell: bash
         run: |
           set -e
-
           rm -rf "$GITHUB_WORKSPACE/beatverse_source"
           mkdir -p "$GITHUB_WORKSPACE/beatverse_source"
-
-          unzip -q -o "$ZIP_FILE" \
-            -d "$GITHUB_WORKSPACE/beatverse_source"
+          unzip -q -o "$ZIP_FILE" -d "$GITHUB_WORKSPACE/beatverse_source"
 
       - name: Locate Flutter project
         shell: bash
         run: |
           set -e
-
-          PUBSPEC="$(find "$GITHUB_WORKSPACE/beatverse_source" \
-            -type f \
-            -name pubspec.yaml \
-            -print -quit)"
-
-          if [ -z "$PUBSPEC" ]; then
-            echo "::error::pubspec.yaml not found"
-            exit 1
-          fi
-
+          PUBSPEC="$(find "$GITHUB_WORKSPACE/beatverse_source" -type f -name pubspec.yaml -print -quit)"
+          [ -z "$PUBSPEC" ] && { echo "::error::pubspec.yaml not found"; exit 1; }
           PROJECT_ROOT="$(dirname "$PUBSPEC")"
-
-          if [ ! -d "$PROJECT_ROOT/lib" ]; then
-            echo "::error::Flutter lib directory missing"
-            exit 1
-          fi
-
+          [ ! -d "$PROJECT_ROOT/lib" ] && { echo "::error::Flutter lib directory missing"; exit 1; }
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-
           echo "================================"
           echo "PROJECT: $PROJECT_ROOT"
           echo "================================"
@@ -90,21 +62,12 @@ jobs:
         shell: bash
         run: |
           set -e
-
           if [ ! -f android/app/build.gradle ]; then
             rm -rf android
-
-            flutter create \
-              --platforms=android \
-              --org com.beatverse \
-              --project-name beatverse \
-              .
-
+            flutter create --platforms=android --org com.beatverse --project-name beatverse .
           fi
-
           test -f android/settings.gradle
           test -f android/app/build.gradle
-
           echo "Android platform ready."
 
       - name: Force compatible Android toolchain
@@ -112,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -e
-
+          
           cat > android/settings.gradle <<'EOF'
           pluginManagement {
               def flutterSdkPath = {
@@ -135,7 +98,7 @@ jobs:
           plugins {
               id "dev.flutter.flutter-plugin-loader" version "1.0.0"
               id "com.android.application" version "8.3.2" apply false
-              id "org.jetbrains.kotlin.android" version "1.8.22" apply false
+              id "org.jetbrains.kotlin.android" version "1.9.20" apply false
           }
 
           include ":app"
@@ -144,7 +107,7 @@ jobs:
           cat > android/build.gradle <<'EOF'
           plugins {
               id "com.android.application" version "8.3.2" apply false
-              id "org.jetbrains.kotlin.android" version "1.8.22" apply false
+              id "org.jetbrains.kotlin.android" version "1.9.20" apply false
           }
 
           allprojects {
@@ -229,6 +192,17 @@ jobs:
               cleaned.append(line)
 
           text = "\n".join(cleaned) + "\n"
+
+          # Add kotlinOptions for Java 17
+          if "kotlinOptions {" not in text:
+              text = text.replace(
+                  "android {",
+                  """android {
+              kotlinOptions {
+                  jvmTarget = '17'
+              }""",
+                  1
+              )
 
           # Enable core library desugaring.
           if "coreLibraryDesugaringEnabled true" not in text:
