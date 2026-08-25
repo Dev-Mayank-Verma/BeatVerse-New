@@ -11,74 +11,93 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: "3.24.0"
           channel: stable
           cache: true
 
       - name: Find BeatVerse ZIP
+        shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname 'BeatVerse*.zip' | head -n 1)
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 2 \
+            -type f \
+            -iname 'BeatVerse*.zip' \
+            -print -quit)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "BeatVerse ZIP not found"
+            echo "::error::BeatVerse ZIP not found"
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "ZIP: $ZIP_FILE"
+          echo "Found: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract project
+      - name: Extract BeatVerse
+        shell: bash
         run: |
           set -e
 
-          rm -rf beatverse_source
-          mkdir beatverse_source
+          rm -rf "$GITHUB_WORKSPACE/beatverse_source"
+          mkdir -p "$GITHUB_WORKSPACE/beatverse_source"
 
-          unzip -q -o "$ZIP_FILE" -d beatverse_source
+          unzip -q -o "$ZIP_FILE" \
+            -d "$GITHUB_WORKSPACE/beatverse_source"
 
-          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/beatverse_source" \
-            -name pubspec.yaml \
+      - name: Locate Flutter project
+        shell: bash
+        run: |
+          set -e
+
+          PUBSPEC="$(find "$GITHUB_WORKSPACE/beatverse_source" \
             -type f \
-            -print -quit)
+            -name pubspec.yaml \
+            -print -quit)"
 
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo "pubspec.yaml not found"
+          if [ -z "$PUBSPEC" ]; then
+            echo "::error::pubspec.yaml not found"
+            find "$GITHUB_WORKSPACE/beatverse_source" \
+              -maxdepth 6 -type f | sort
             exit 1
           fi
 
-          PROJECT_ROOT=$(dirname "$PROJECT_ROOT")
+          PROJECT_ROOT="$(dirname "$PUBSPEC")"
+
+          if [ ! -d "$PROJECT_ROOT/lib" ]; then
+            echo "::error::lib directory not found"
+            exit 1
+          fi
 
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-          echo "Project:"
+          echo "Flutter project:"
           echo "$PROJECT_ROOT"
 
-          ls -la "$PROJECT_ROOT"
-
-      - name: Generate Android project if missing
+      - name: Generate Android project
         working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
         run: |
           set -e
 
-          if [ ! -f "android/app/build.gradle" ] && \
-             [ ! -f "android/app/build.gradle.kts" ]; then
+          if [ ! -f android/app/build.gradle ] && \
+             [ ! -f android/app/build.gradle.kts ]; then
 
-            echo "Android folder missing."
-            echo "Generating Android project..."
+            echo "Android project missing."
+            echo "Generating Android platform..."
 
             flutter create \
               --platforms=android \
@@ -86,8 +105,6 @@ jobs:
               --project-name beatverse \
               .
 
-          else
-            echo "Android project already exists."
           fi
 
           test -d android
@@ -101,23 +118,72 @@ jobs:
         working-directory: ${{ env.PROJECT_ROOT }}
         run: flutter pub get
 
-      - name: Enable desugaring
+      - name: Fix Kotlin version
         working-directory: ${{ env.PROJECT_ROOT }}
         shell: bash
         run: |
           set -e
 
-          FILE="android/app/build.gradle"
+          SETTINGS="android/settings.gradle"
+          BUILD="android/build.gradle"
 
-          if [ -f "$FILE" ]; then
+          if [ -f "$SETTINGS" ]; then
+            python3 - "$SETTINGS" <<'PY'
+          import sys
+          import re
+
+          path = sys.argv[1]
+          text = open(path).read()
+
+          pattern = (
+              r'(id\s+["\']org\.jetbrains\.kotlin\.android'
+              r'["\']\s+version\s+["\'])[^"\']+(["\'])'
+          )
+
+          text = re.sub(
+              pattern,
+              r'\g<1>1.9.24\2',
+              text
+          )
+
+          open(path, "w").write(text)
+          PY
+          fi
+
+          if [ -f "$BUILD" ]; then
+            python3 - "$BUILD" <<'PY'
+          import sys
+          import re
+
+          path = sys.argv[1]
+          text = open(path).read()
+
+          text = re.sub(
+              r'(ext\.kotlin_version\s*=\s*["\'])[^"\']+(["\'])',
+              r'\g<1>1.9.24\2',
+              text
+          )
+
+          open(path, "w").write(text)
+          PY
+          fi
+
+          echo "Kotlin configuration:"
+          grep -R "kotlin" android/settings.gradle android/build.gradle 2>/dev/null || true
+
+      - name: Enable core library desugaring
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f android/app/build.gradle ]; then
 
             python3 <<'PY'
           path = "android/app/build.gradle"
 
-          with open(path, "r") as f:
-              text = f.read()
+          text = open(path).read()
 
-          # Enable core library desugaring
           if "coreLibraryDesugaringEnabled true" not in text:
               if "compileOptions {" in text:
                   text = text.replace(
@@ -136,7 +202,6 @@ jobs:
           }
           """
 
-          # Add desugaring dependency
           if "desugar_jdk_libs" not in text:
               if "dependencies {" in text:
                   text = text.replace(
@@ -153,17 +218,15 @@ jobs:
           }
           """
 
-          with open(path, "w") as f:
-              f.write(text)
+          open(path, "w").write(text)
           PY
 
-          elif [ -f "android/app/build.gradle.kts" ]; then
+          elif [ -f android/app/build.gradle.kts ]; then
 
             python3 <<'PY'
           path = "android/app/build.gradle.kts"
 
-          with open(path, "r") as f:
-              text = f.read()
+          text = open(path).read()
 
           if "isCoreLibraryDesugaringEnabled = true" not in text:
               if "compileOptions {" in text:
@@ -183,33 +246,68 @@ jobs:
                       1
                   )
 
-          with open(path, "w") as f:
-              f.write(text)
+          open(path, "w").write(text)
           PY
 
           else
-            echo "No Android Gradle file found"
+            echo "::error::Android Gradle file not found"
             exit 1
+          fi
+
+      - name: Set Android SDK versions
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -e
+
+          FILE="android/app/build.gradle"
+
+          if [ -f "$FILE" ]; then
+            python3 <<'PY'
+          path = "android/app/build.gradle"
+
+          text = open(path).read()
+
+          text = text.replace(
+              "minSdkVersion flutter.minSdkVersion",
+              "minSdkVersion 21"
+          )
+
+          text = text.replace(
+              "minSdk = flutter.minSdkVersion",
+              "minSdk = 21"
+          )
+
+          open(path, "w").write(text)
+          PY
           fi
 
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_ROOT }}
-        run: flutter build apk --release
-
-      - name: Check APK
         run: |
+          flutter build apk --release
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
           APK="$PROJECT_ROOT/build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "APK was not generated."
+            echo "::error::APK was not generated"
+            find "$PROJECT_ROOT/build" -type f 2>/dev/null | sort
             exit 1
           fi
 
+          echo "======================================"
+          echo "BeatVerse APK BUILD SUCCESSFUL"
+          echo "======================================"
           ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BeatVerse-release
+          name: BeatVerse-release-apk
           path: ${{ env.PROJECT_ROOT }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
