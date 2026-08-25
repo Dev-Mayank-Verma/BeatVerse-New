@@ -291,34 +291,102 @@ jobs:
               native <methods>;
           }
 
-          # Android API 34 compatibility - Keep BackEvent class
-          -keep,allowobfuscation class android.window.BackEvent { *; }
+          # Dontwarn missing Android API 34 classes
           -dontwarn android.window.BackEvent
           -dontwarn android.window.**
+          -dontwarn android.graphics.Path$**
+          -dontwarn android.graphics.Matrix**
 
-          # Keep Flutter classes
-          -keep,allowobfuscation class io.flutter.** { *; }
+          # Keep Flutter core classes
+          -keep class io.flutter.** { *; }
           -dontwarn io.flutter.**
+          -keep class io.flutter.view.** { *; }
+          -keep class io.flutter.embedding.** { *; }
 
           # Keep WebView
-          -keep,allowobfuscation class android.webkit.** { *; }
+          -keep class android.webkit.** { *; }
           -dontwarn android.webkit.**
 
-          # General keep rules
+          # Keep flutter_inappwebview plugin
+          -keep class com.pichillilorenzo.flutter_inappwebview.** { *; }
+          -dontwarn com.pichillilorenzo.flutter_inappwebview.**
+          -keep class com.pichillilorenzo.** { *; }
+          -dontwarn com.pichillilorenzo.**
+
+          # Keep generic Android classes
+          -keep class android.content.** { *; }
+          -keep class android.app.** { *; }
+          -keep class android.os.** { *; }
+          -keep class android.view.** { *; }
+
+          # Keep Serializable classes
+          -keepclassmembers class * implements java.io.Serializable {
+              static final long serialVersionUID;
+              private static final java.io.ObjectStreamField[] serialPersistentFields;
+              private void writeObject(java.io.ObjectOutputStream);
+              private void readObject(java.io.ObjectInputStream);
+              java.lang.Object writeReplace();
+              java.lang.Object readResolve();
+          }
+
+          # Keep Parcelable classes
+          -keep class * implements android.os.Parcelable {
+              public static final android.os.Parcelable$Creator *;
+          }
+
+          # General attributes
           -keepattributes *Annotation*
           -keepattributes Signature
           -keepattributes SourceFile,LineNumberTable
           -keepattributes Exceptions
+          -keepattributes InnerClasses
+          -keepattributes Synthetic
+          -keepattributes EnclosingMethod
 
-          # Ignore warnings for optional APIs
+          # Ignore all warnings
           -ignorewarnings
 
-          # Remove logging in release builds
+          # Remove verbose logging
           -assumenosideeffects class android.util.Log {
               public static *** d(...);
               public static *** v(...);
               public static *** i(...);
+              public static *** w(...);
           }
+
+          # Kotlin specific
+          -keepclassmembers class **$WhenMappings {
+              <fields>;
+          }
+          -keep class kotlin.Metadata { *; }
+          -dontwarn kotlin.**
+
+          # Gson
+          -keep class com.google.gson.** { *; }
+          -dontwarn com.google.gson.**
+
+          # Retrofit
+          -keep class retrofit.** { *; }
+          -dontwarn retrofit.**
+
+          # OkHttp
+          -keep class okhttp.** { *; }
+          -keep class okhttp3.** { *; }
+          -dontwarn okhttp.**
+          -dontwarn okhttp3.**
+
+          # AndroidX
+          -keep class androidx.** { *; }
+          -dontwarn androidx.**
+
+          # Google Play Services
+          -keep class com.google.** { *; }
+          -dontwarn com.google.**
+
+          # Range rules
+          -dontwarn com.google.common.**
+          -dontwarn java.lang.invoke.**
+          -dontwarn sun.misc.**
           EOF
 
           echo "ProGuard rules created successfully"
