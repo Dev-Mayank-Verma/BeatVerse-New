@@ -1,4 +1,4 @@
-name: BeatVerse Android Build
+name: BeatVerse APK
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -28,71 +28,70 @@ jobs:
           cache: true
 
       - name: Find BeatVerse ZIP
-        shell: bash
         run: |
           set -e
 
-          ZIP_FILE="$(find . -maxdepth 2 -type f -iname 'BeatVerse*.zip' | head -n 1)"
+          ZIP_FILE=$(find . -maxdepth 2 -type f -iname 'BeatVerse*.zip' | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: BeatVerse ZIP not found."
-            echo "Repository contents:"
-            find . -maxdepth 3 -type f | sort
+            echo "BeatVerse ZIP not found"
             exit 1
           fi
 
-          echo "Found project archive: $ZIP_FILE"
+          echo "ZIP: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract BeatVerse
-        shell: bash
+      - name: Extract project
         run: |
           set -e
 
           rm -rf beatverse_source
-          mkdir -p beatverse_source
+          mkdir beatverse_source
 
           unzip -q -o "$ZIP_FILE" -d beatverse_source
 
-          echo "Extracted files:"
-          find beatverse_source -maxdepth 3 -type f | sort | head -200
-
-      - name: Locate Flutter project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT_ROOT="$(find "$GITHUB_WORKSPACE/beatverse_source" \
-            -type f -name pubspec.yaml \
-            -not -path '*/.dart_tool/*' \
-            -print -quit)"
+          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/beatverse_source" \
+            -name pubspec.yaml \
+            -type f \
+            -print -quit)
 
           if [ -z "$PROJECT_ROOT" ]; then
-            echo "ERROR: pubspec.yaml not found."
-            find beatverse_source -maxdepth 5 -type f | sort
+            echo "pubspec.yaml not found"
             exit 1
           fi
 
-          PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
-
-          if [ ! -d "$PROJECT_ROOT/lib" ]; then
-            echo "ERROR: lib directory not found in $PROJECT_ROOT"
-            exit 1
-          fi
-
-          echo "Flutter project:"
-          echo "$PROJECT_ROOT"
+          PROJECT_ROOT=$(dirname "$PROJECT_ROOT")
 
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-      - name: Show project structure
-        shell: bash
-        run: |
-          echo "PROJECT_ROOT=$PROJECT_ROOT"
+          echo "Project:"
+          echo "$PROJECT_ROOT"
+
           ls -la "$PROJECT_ROOT"
-          echo
-          echo "pubspec.yaml:"
-          head -80 "$PROJECT_ROOT/pubspec.yaml"
+
+      - name: Generate Android project if missing
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          set -e
+
+          if [ ! -f "android/app/build.gradle" ] && \
+             [ ! -f "android/app/build.gradle.kts" ]; then
+
+            echo "Android folder missing."
+            echo "Generating Android project..."
+
+            flutter create \
+              --platforms=android \
+              --org com.beatverse \
+              --project-name beatverse \
+              .
+
+          else
+            echo "Android project already exists."
+          fi
+
+          test -d android
+          echo "Android project ready."
 
       - name: Flutter clean
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -102,28 +101,29 @@ jobs:
         working-directory: ${{ env.PROJECT_ROOT }}
         run: flutter pub get
 
-      - name: Enable core library desugaring
+      - name: Enable desugaring
+        working-directory: ${{ env.PROJECT_ROOT }}
         shell: bash
         run: |
           set -e
 
-          APP_GRADLE="$PROJECT_ROOT/android/app/build.gradle"
-          APP_GRADLE_KTS="$PROJECT_ROOT/android/app/build.gradle.kts"
+          FILE="android/app/build.gradle"
 
-          if [ -f "$APP_GRADLE" ]; then
-            python3 - "$APP_GRADLE" <<'PY'
-          import sys
+          if [ -f "$FILE" ]; then
 
-          path = sys.argv[1]
+            python3 <<'PY'
+          path = "android/app/build.gradle"
 
           with open(path, "r") as f:
               text = f.read()
 
-          if "isCoreLibraryDesugaringEnabled = true" not in text:
+          # Enable core library desugaring
+          if "coreLibraryDesugaringEnabled true" not in text:
               if "compileOptions {" in text:
                   text = text.replace(
                       "compileOptions {",
-                      "compileOptions {\n        coreLibraryDesugaringEnabled true",
+                      """compileOptions {
+                  coreLibraryDesugaringEnabled true""",
                       1
                   )
               else:
@@ -136,11 +136,13 @@ jobs:
           }
           """
 
+          # Add desugaring dependency
           if "desugar_jdk_libs" not in text:
               if "dependencies {" in text:
                   text = text.replace(
                       "dependencies {",
-                      'dependencies {\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"',
+                      """dependencies {
+              coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4""",
                       1
                   )
               else:
@@ -155,11 +157,10 @@ jobs:
               f.write(text)
           PY
 
-          elif [ -f "$APP_GRADLE_KTS" ]; then
-            python3 - "$APP_GRADLE_KTS" <<'PY'
-          import sys
+          elif [ -f "android/app/build.gradle.kts" ]; then
 
-          path = sys.argv[1]
+            python3 <<'PY'
+          path = "android/app/build.gradle.kts"
 
           with open(path, "r") as f:
               text = f.read()
@@ -168,78 +169,47 @@ jobs:
               if "compileOptions {" in text:
                   text = text.replace(
                       "compileOptions {",
-                      "compileOptions {\n        isCoreLibraryDesugaringEnabled = true",
+                      """compileOptions {
+                  isCoreLibraryDesugaringEnabled = true""",
                       1
                   )
-              else:
-                  text += """
-
-          android {
-              compileOptions {
-                  isCoreLibraryDesugaringEnabled = true
-              }
-          }
-          """
 
           if "desugar_jdk_libs" not in text:
               if "dependencies {" in text:
                   text = text.replace(
                       "dependencies {",
-                      'dependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")',
+                      """dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")""",
                       1
                   )
-              else:
-                  text += """
-
-          dependencies {
-              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-          }
-          """
 
           with open(path, "w") as f:
               f.write(text)
           PY
 
           else
-            echo "ERROR: Android app Gradle file not found."
+            echo "No Android Gradle file found"
             exit 1
           fi
-
-      - name: Check Android project
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          flutter doctor -v
-          echo
-          echo "Android directory:"
-          ls -la android
-          echo
-          echo "App Gradle:"
-          ls -la android/app
 
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          flutter build apk --release
+        run: flutter build apk --release
 
-      - name: Verify APK
-        shell: bash
+      - name: Check APK
         run: |
-          set -e
-
           APK="$PROJECT_ROOT/build/app/outputs/flutter-apk/app-release.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
-            find "$PROJECT_ROOT/build" -type f 2>/dev/null | sort | tail -100
+            echo "APK was not generated."
             exit 1
           fi
 
-          echo "APK generated successfully:"
           ls -lh "$APK"
 
-      - name: Upload Release APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BeatVerse-release-apk
+          name: BeatVerse-release
           path: ${{ env.PROJECT_ROOT }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
