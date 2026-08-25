@@ -144,7 +144,7 @@ jobs:
           cat > android/gradle/wrapper/gradle-wrapper.properties <<'EOF'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-all.zip
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.6-all.zip
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
@@ -198,9 +198,9 @@ jobs:
               text = text.replace(
                   "android {",
                   """android {
-              kotlinOptions {
-                  jvmTarget = '17'
-              }""",
+               kotlinOptions {
+                   jvmTarget = '17'
+               }""",
                   1
               )
 
@@ -210,7 +210,7 @@ jobs:
                   text = text.replace(
                       "compileOptions {",
                       """compileOptions {
-                  coreLibraryDesugaringEnabled true""",
+                   coreLibraryDesugaringEnabled true""",
                       1
                   )
               else:
@@ -228,7 +228,7 @@ jobs:
                   text = text.replace(
                       "dependencies {",
                       """dependencies {
-                coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4""",
+                 coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4""",
                       1
                   )
               else:
