@@ -2,394 +2,203 @@ name: Build BeatVerse APK
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: {}
-
-permissions:
-  contents: read
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          path: repo
 
-      # ============================================================
-      # 2. JAVA
-      # ============================================================
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
-          
+          java-version: '17'
 
-      # ============================================================
-      # 3. FLUTTER
-      # ============================================================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.24.0"
+          flutter-version: '3.24.0'
           channel: stable
           cache: true
 
-      # ============================================================
-      # 4. DETECT SOURCE ROOT
-      # ============================================================
-      - name: Detect Flutter source
-        shell: bash
+      - name: Verify Flutter project
         run: |
           set -e
+          echo "Repository:"
+          pwd
+          echo "Files:"
+          ls -la
 
-          echo "Repository contents:"
-          find repo -maxdepth 3 -type f \
-            \( -name "pubspec.yaml" -o -name "main.dart" \) \
-            -print
+          test -f pubspec.yaml
+          test -d lib
 
-          if [ -f "repo/pubspec.yaml" ] && [ -d "repo/lib" ]; then
-            SOURCE_ROOT="repo"
+          echo "Flutter project detected successfully."
+          flutter --version
 
-          elif [ -f "repo/BeatVerse-main/pubspec.yaml" ] && \
-               [ -d "repo/BeatVerse-main/lib" ]; then
-            SOURCE_ROOT="repo/BeatVerse-main"
-
-          else
-            SOURCE_ROOT="$(find repo -type f -name pubspec.yaml \
-              -print -quit | xargs -r dirname)"
-
-            if [ -z "$SOURCE_ROOT" ] || \
-               [ ! -f "$SOURCE_ROOT/pubspec.yaml" ] || \
-               [ ! -d "$SOURCE_ROOT/lib" ]; then
-              echo "::error::Could not find Flutter source root."
-              exit 1
-            fi
-          fi
-
-          echo "SOURCE_ROOT=$SOURCE_ROOT" >> "$GITHUB_ENV"
-          echo "Detected Flutter source: $SOURCE_ROOT"
-
-      # ============================================================
-      # 5. CREATE FRESH ANDROID PROJECT
-      # ============================================================
       - name: Create Android project
         run: |
-          set -e
-
-          rm -rf scaffold
-
           flutter create \
             --platforms=android \
             --org com.beatverse \
             --project-name beatverse \
             scaffold
 
-      # ============================================================
-      # 6. COPY FLUTTER SOURCE
-      # ============================================================
-      - name: Copy Flutter source
+      - name: Copy BeatVerse source
         run: |
-          set -e
-
-          test -f "$SOURCE_ROOT/pubspec.yaml"
-          test -d "$SOURCE_ROOT/lib"
-
           rm -rf scaffold/lib
+          cp -r lib scaffold/lib
+          cp pubspec.yaml scaffold/pubspec.yaml
 
-          cp -a "$SOURCE_ROOT/lib" scaffold/lib
-          cp -a "$SOURCE_ROOT/pubspec.yaml" scaffold/pubspec.yaml
-
-          echo "Flutter source copied successfully."
-
-      # ============================================================
-      # 7. PATCH ANDROID CONFIG SAFELY
-      # ============================================================
-      - name: Fix Android compatibility
-        shell: bash
+      - name: Configure Android
         run: |
-          set -e
-
           python3 << 'PY'
-          from pathlib import Path
           import re
 
-          settings = Path("scaffold/android/settings.gradle")
-          app_gradle = Path("scaffold/android/app/build.gradle")
-
-          # --------------------------------------------------------
           # Kotlin version
-          # --------------------------------------------------------
-          if settings.exists():
-              text = settings.read_text()
+          p = "scaffold/android/settings.gradle"
+          text = open(p).read()
 
-              new_text = re.sub(
-                  r'(id\s+["\']org\.jetbrains\.kotlin\.android["\']\s+version\s+["\'])[^"\']+(["\'])',
-                  r'\g<1>1.9.24\2',
-                  text
-              )
+          text = re.sub(
+              r'(id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+")[^"]+(")',
+              r'\g<1>1.9.24\2',
+              text
+          )
 
-              if new_text != text:
-                  settings.write_text(new_text)
-                  print("Kotlin version fixed.")
-              else:
-                  print("Kotlin version already compatible or not present.")
+          open(p, "w").write(text)
 
-          # --------------------------------------------------------
           # minSdk
-          # --------------------------------------------------------
-          if app_gradle.exists():
-              text = app_gradle.read_text()
+          p = "scaffold/android/app/build.gradle"
+          text = open(p).read()
 
-              original = text
+          text = re.sub(
+              r'minSdk\s*=\s*flutter\.minSdkVersion',
+              'minSdk = 21',
+              text
+          )
 
-              text = re.sub(
-                  r'minSdk\s*=\s*flutter\.minSdkVersion',
-                  'minSdk = 21',
-                  text
-              )
+          text = re.sub(
+              r'minSdkVersion\s+flutter\.minSdkVersion',
+              'minSdkVersion 21',
+              text
+          )
 
-              text = re.sub(
-                  r'minSdkVersion\s+flutter\.minSdkVersion',
-                  'minSdkVersion 21',
-                  text
-              )
+          text = re.sub(
+              r'minSdkVersion\s+\d+',
+              'minSdkVersion 21',
+              text
+          )
 
-              text = re.sub(
-                  r'minSdkVersion\s+\d+',
-                  'minSdkVersion 21',
-                  text
-              )
-
-              if text != original:
-                  app_gradle.write_text(text)
-                  print("minSdk fixed to 21.")
-              else:
-                  print("minSdk already compatible.")
-
+          open(p, "w").write(text)
           PY
 
-      # ============================================================
-      # 8. ENABLE CORE LIBRARY DESUGARING
-      #    Only if flutter_local_notifications requires it.
-      # ============================================================
-      - name: Configure core library desugaring
-        working-directory: scaffold
-        shell: bash
+      - name: Enable core library desugaring
         run: |
-          set -e
+          python3 << 'PY'
+          p = "scaffold/android/app/build.gradle"
+          text = open(p).read()
 
-          if grep -qi "flutter_local_notifications" pubspec.yaml; then
-            echo "flutter_local_notifications detected."
-
-            python3 << 'PY'
-            from pathlib import Path
-            import re
-
-            p = Path("android/app/build.gradle")
-            text = p.read_text()
-
-            # Add compileOptions if missing.
-            if "isCoreLibraryDesugaringEnabled" not in text:
-                marker = "android {"
-
-                block = """android {
-                    compileOptions {
-                        coreLibraryDesugaringEnabled true
-                        sourceCompatibility JavaVersion.VERSION_17
-                        targetCompatibility JavaVersion.VERSION_17
-                    }
-                """
-
-                if marker in text:
-                    text = text.replace(marker, block, 1)
-                    p.write_text(text)
-                    print("Core library desugaring enabled.")
-                else:
-                    print("WARNING: android block not found.")
-            else:
-                print("Core library desugaring already enabled.")
-
-            PY
-
-            # Add dependency only if absent.
-            if ! grep -q "coreLibraryDesugaring" android/app/build.gradle; then
-              python3 << 'PY'
-              from pathlib import Path
-
-              p = Path("android/app/build.gradle")
-              text = p.read_text()
-
-              if "dependencies {" in text:
+          # Add desugaring dependency if not already present
+          if "desugar_jdk_libs" not in text:
+              marker = "dependencies {"
+              if marker in text:
                   text = text.replace(
-                      "dependencies {",
-                      """dependencies {
-                      coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
-                      """,
+                      marker,
+                      marker + '\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"',
                       1
                   )
-                  p.write_text(text)
-                  print("Desugaring dependency added.")
+
+          # Enable desugaring
+          if "isCoreLibraryDesugaringEnabled = true" not in text:
+              marker = "compileOptions {"
+
+              if marker in text:
+                  text = text.replace(
+                      marker,
+                      marker + "\n        isCoreLibraryDesugaringEnabled = true",
+                      1
+                  )
               else:
-                  print("WARNING: dependencies block not found.")
-              PY
-            else
-              echo "Desugaring dependency already present."
-            fi
+                  text += """
+          android {
+              compileOptions {
+                  isCoreLibraryDesugaringEnabled = true
+              }
+          }
+          """
 
-          else
-            echo "flutter_local_notifications not detected; skipping desugaring patch."
-          fi
+          open(p, "w").write(text)
+          PY
 
-      # ============================================================
-      # 9. MANIFEST
-      # ============================================================
-      - name: Configure Android manifest
-        shell: bash
+      - name: Configure AndroidManifest
         run: |
-          set -e
+          cat > scaffold/android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
 
-          MANIFEST="scaffold/android/app/src/main/AndroidManifest.xml"
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
-          if [ -f "$MANIFEST" ]; then
-            echo "AndroidManifest already exists. Keeping generated manifest."
-          else
-            echo "WARNING: AndroidManifest missing."
-            exit 1
-          fi
+              <application
+                  android:label="BeatVerse"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
 
-      # ============================================================
-      # 10. PUB GET
-      # ============================================================
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:taskAffinity=""
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+
+                  </activity>
+
+                  <receiver
+                      android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                      </intent-filter>
+
+                  </receiver>
+
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2"/>
+
+              </application>
+          </manifest>
+          EOF
+
       - name: Flutter pub get
         working-directory: scaffold
-        run: |
-          set -e
-          flutter pub get
+        run: flutter pub get
 
-      # ============================================================
-      # 11. PATCH INAPPWEBVIEW
-      #     Only when the old 5.8.0 package exists.
-      # ============================================================
-      - name: Fix flutter_inappwebview R8 configuration
-        shell: bash
-        run: |
-          set -e
-
-          FOUND=0
-
-          for FILE in \
-            "$HOME/.pub-cache/hosted/pub.dev/flutter_inappwebview-5.8.0/android/build.gradle" \
-            "$HOME/.pub-cache/hosted/pub.dev/flutter_inappwebview-"*/android/build.gradle
-          do
-            if [ -f "$FILE" ]; then
-              FOUND=1
-
-              if grep -q "proguard-android.txt" "$FILE"; then
-                echo "Old ProGuard configuration found:"
-                echo "$FILE"
-
-                sed -i \
-                  's/proguard-android\.txt/proguard-android-optimize.txt/g' \
-                  "$FILE"
-
-                echo "ProGuard configuration patched."
-              else
-                echo "ProGuard configuration already compatible:"
-                echo "$FILE"
-              fi
-            fi
-          done
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "flutter_inappwebview not found in pub cache."
-            echo "Nothing to patch."
-          fi
-
-      # ============================================================
-      # 12. VERIFY IMPORTANT CONFIGURATION
-      # ============================================================
-      - name: Verify Android configuration
+      - name: Build Release APK
         working-directory: scaffold
-        shell: bash
-        run: |
-          set -e
+        run: flutter build apk --release
 
-          echo "Flutter version:"
-          flutter --version
-
-          echo
-          echo "Java version:"
-          java -version
-
-          echo
-          echo "Pub dependencies:"
-          flutter pub deps --style=compact
-
-          echo
-          echo "Checking Android Gradle files..."
-
-          test -f android/settings.gradle
-          test -f android/app/build.gradle
-          test -f android/app/src/main/AndroidManifest.xml
-
-          echo "Android project structure OK."
-
-      # ============================================================
-      # 13. CLEAN
-      # ============================================================
-      - name: Flutter clean
-        working-directory: scaffold
-        run: |
-          flutter clean
-
-      # ============================================================
-      # 14. GET AGAIN AFTER PATCHES
-      # ============================================================
-      - name: Flutter pub get after fixes
-        working-directory: scaffold
-        run: |
-          flutter pub get
-
-      # ============================================================
-      # 15. BUILD
-      # ============================================================
-      - name: Build release APK
-        working-directory: scaffold
-        run: |
-          set -o pipefail
-
-          flutter build apk \
-            --release \
-            --verbose
-
-      # ============================================================
-      # 16. VERIFY APK EXISTS
-      # ============================================================
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          APK="scaffold/build/app/outputs/flutter-apk/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "::error::APK was not generated."
-            exit 1
-          fi
-
-          echo "APK generated successfully:"
-          ls -lh "$APK"
-
-      # ============================================================
-      # 17. UPLOAD
-      # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
