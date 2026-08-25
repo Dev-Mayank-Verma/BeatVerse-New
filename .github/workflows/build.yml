@@ -252,7 +252,7 @@ jobs:
                   text = text.replace(
                       "dependencies {",
                       """dependencies {
-              coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4""",
+               coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4""",
                       1
                   )
               else:
@@ -262,8 +262,61 @@ jobs:
           }
           """
 
+          # Add R8 keep rules for Android API 34 compatibility
+          if "buildTypes {" not in text:
+              text += """
+          buildTypes {
+              release {
+                  proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+              }
+          }
+          """
+
           open(path, "w").write(text)
           PY
+
+      - name: Create ProGuard rules for R8
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p android/app
+
+          cat > android/app/proguard-rules.pro <<'EOF'
+          # Keep native methods
+          -keepclasseswithmembernames class * {
+              native <methods>;
+          }
+
+          # Android API 34 compatibility - Keep BackEvent class
+          -keep class android.window.BackEvent { *; }
+          -dontwarn android.window.BackEvent
+          -dontwarn android.window.**
+
+          # Keep Flutter classes
+          -keep class io.flutter.** { *; }
+          -dontwarn io.flutter.**
+
+          # Keep WebView
+          -keep class android.webkit.** { *; }
+          -dontwarn android.webkit.**
+
+          # General keep rules
+          -keepattributes *Annotation*
+          -keepattributes Signature
+          -keepattributes SourceFile,LineNumberTable
+          -keepattributes Exceptions
+
+          # Remove logging in release builds
+          -assumenosideeffects class android.util.Log {
+              public static *** d(...);
+              public static *** v(...);
+              public static *** i(...);
+          }
+          EOF
+
+          echo "ProGuard rules created successfully"
 
       - name: Flutter pub get
         working-directory: ${{ env.PROJECT_ROOT }}
