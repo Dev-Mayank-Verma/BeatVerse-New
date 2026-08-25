@@ -99,6 +99,7 @@ jobs:
               --org com.beatverse \
               --project-name beatverse \
               .
+
           fi
 
           test -f android/settings.gradle
@@ -204,8 +205,7 @@ jobs:
               "minSdkVersion 21"
           )
 
-          # Remove old Kotlin compiler configuration that can force
-          # an incompatible compiler.
+          # Remove old kotlinOptions blocks.
           lines = text.splitlines()
           cleaned = []
 
@@ -228,16 +228,17 @@ jobs:
 
           text = "\n".join(cleaned) + "\n"
 
-          if "compileOptions {" in text:
-              if "coreLibraryDesugaringEnabled true" not in text:
+          # Enable core library desugaring.
+          if "coreLibraryDesugaringEnabled true" not in text:
+              if "compileOptions {" in text:
                   text = text.replace(
                       "compileOptions {",
                       """compileOptions {
                   coreLibraryDesugaringEnabled true""",
                       1
                   )
-          else:
-              text += """
+              else:
+                  text += """
           android {
               compileOptions {
                   coreLibraryDesugaringEnabled true
@@ -245,16 +246,17 @@ jobs:
           }
           """
 
-          if "dependencies {" in text:
-              if "desugar_jdk_libs" not in text:
+          # Add desugaring dependency.
+          if "coreLibraryDesugaring " not in text:
+              if "dependencies {" in text:
                   text = text.replace(
                       "dependencies {",
                       """dependencies {
               coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4""",
                       1
                   )
-          else:
-              text += """
+              else:
+                  text += """
           dependencies {
               coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
           }
@@ -263,15 +265,219 @@ jobs:
           open(path, "w").write(text)
           PY
 
-          echo "===== settings.gradle ====="
-          cat android/settings.gradle
+      - name: Flutter pub get
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          set -e
+          flutter pub get
 
-          echo "===== app/build.gradle ====="
-          cat android/app/build.gradle
+      - name: Fix legacy Android plugin namespaces
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching Flutter plugins for missing namespaces..."
+
+          PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
+
+          python3 <<'PY'
+          import os
+          import re
+          import glob
+
+          pub_cache = os.environ.get(
+              "PUB_CACHE",
+              os.path.expanduser("~/.pub-cache")
+          )
+
+          roots = [
+              os.path.join(pub_cache, "hosted"),
+              os.path.join(pub_cache, "git"),
+          ]
+
+          fixed = []
+
+          for root in roots:
+              if not os.path.isdir(root):
+                  continue
+
+              for build_file in glob.glob(
+                  os.path.join(root, "**", "android", "build.gradle"),
+                  recursive=True
+              ):
+                  try:
+                      text = open(
+                          build_file,
+                          "r",
+                          encoding="utf-8"
+                      ).read()
+                  except Exception:
+                      continue
+
+                  if "com.android.library" not in text:
+                      continue
+
+                  if re.search(
+                      r'^\s*namespace\s+[\'"]',
+                      text,
+                      re.MULTILINE
+                  ):
+                      continue
+
+                  manifest_candidates = [
+                      os.path.join(
+                          os.path.dirname(build_file),
+                          "src",
+                          "main",
+                          "AndroidManifest.xml"
+                      ),
+                      os.path.join(
+                          os.path.dirname(build_file),
+                          "src",
+                          "main",
+                          "AndroidManifest.xml"
+                      ),
+                  ]
+
+                  package_name = None
+
+                  for manifest in manifest_candidates:
+                      if not os.path.isfile(manifest):
+                          continue
+
+                      try:
+                          manifest_text = open(
+                              manifest,
+                              "r",
+                              encoding="utf-8"
+                          ).read()
+                      except Exception:
+                          continue
+
+                      match = re.search(
+                          r'<manifest[^>]*\bpackage\s*=\s*["\']([^"\']+)["\']',
+                          manifest_text
+                      )
+
+                      if match:
+                          package_name = match.group(1)
+                          break
+
+                  if not package_name:
+                      continue
+
+                  lines = text.splitlines()
+
+                  insert_at = None
+
+                  for i, line in enumerate(lines):
+                      if "android {" in line:
+                          insert_at = i + 1
+                          break
+
+                  if insert_at is None:
+                      continue
+
+                  lines.insert(
+                      insert_at,
+                      f'    namespace "{package_name}"'
+                  )
+
+                  new_text = "\n".join(lines) + "\n"
+
+                  try:
+                      open(
+                          build_file,
+                          "w",
+                          encoding="utf-8"
+                      ).write(new_text)
+
+                      fixed.append(
+                          (build_file, package_name)
+                      )
+                  except Exception:
+                      pass
+
+          print("==========================================")
+          print("Legacy namespace compatibility scan")
+          print("==========================================")
+
+          if fixed:
+              for path, namespace in fixed:
+                  print(
+                      f"FIXED: {path}"
+                      f" -> namespace {namespace}"
+                  )
+          else:
+              print("No missing plugin namespaces detected.")
+
+          print(f"Total fixed: {len(fixed)}")
+          PY
+
+      - name: Force known flutter_inappwebview namespace
+        shell: bash
+        run: |
+          set -e
+
+          PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
+
+          FOUND=0
+
+          while IFS= read -r FILE; do
+            if grep -q "com.android.library" "$FILE" 2>/dev/null; then
+
+              if ! grep -qE '^[[:space:]]*namespace[[:space:]]+' "$FILE"; then
+
+                echo "Adding namespace to:"
+                echo "$FILE"
+
+                python3 - "$FILE" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          text = open(
+              path,
+              "r",
+              encoding="utf-8"
+          ).read()
+
+          if "namespace " not in text:
+              text = text.replace(
+                  "android {",
+                  'android {\n    namespace "com.pichillilorenzo.flutter_inappwebview"',
+                  1
+              )
+
+              open(
+                  path,
+                  "w",
+                  encoding="utf-8"
+              ).write(text)
+          PY
+
+                FOUND=1
+              fi
+            fi
+          done < <(
+            find "$PUB_CACHE" \
+              -type f \
+              -path "*/flutter_inappwebview-*/android/build.gradle" \
+              2>/dev/null
+          )
+
+          if [ "$FOUND" = "1" ]; then
+            echo "flutter_inappwebview namespace compatibility fix applied."
+          else
+            echo "flutter_inappwebview namespace already present or plugin path not found."
+          fi
 
       - name: Clear Gradle caches
         shell: bash
         run: |
+          set -e
+
           rm -rf ~/.gradle/caches
           rm -rf ~/.gradle/daemon
           rm -rf ~/.gradle/native
@@ -279,16 +485,14 @@ jobs:
 
       - name: Flutter clean
         working-directory: ${{ env.PROJECT_ROOT }}
-        run: flutter clean
-
-      - name: Flutter pub get
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: flutter pub get
+        run: |
+          flutter clean
 
       - name: Verify Gradle versions
         working-directory: ${{ env.PROJECT_ROOT }}
         shell: bash
         run: |
+          set -e
           ./android/gradlew --version
 
       - name: Build Release APK
@@ -310,15 +514,18 @@ jobs:
 
           if [ ! -f "$APK" ]; then
             echo "::error::APK not generated"
+
             find "$PROJECT_ROOT/build" \
               -type f \
               2>/dev/null | sort | tail -100
+
             exit 1
           fi
 
           echo "======================================"
           echo "       BEATVERSE BUILD SUCCESS"
           echo "======================================"
+
           ls -lh "$APK"
 
       - name: Upload APK
