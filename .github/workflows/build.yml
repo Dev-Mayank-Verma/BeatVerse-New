@@ -252,118 +252,124 @@ jobs:
           PY
 
       - name: Create ProGuard rules for R8
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_ROOT"
+  shell: bash
+  run: |
+    set -e
+    cd "$PROJECT_ROOT"
 
-          mkdir -p android/app
+    mkdir -p android/app
 
-          cat > android/app/proguard-rules.pro <<'EOF'
-          # Keep native methods
-          -keepclasseswithmembernames class * {
-              native <methods>;
-          }
+    cat > android/app/proguard-rules.pro <<'EOF'
+    # Keep native methods
+    -keepclasseswithmembernames class * {
+        native <methods>;
+    }
 
-          # Dontwarn missing Android API 34 classes
-          -dontwarn android.window.BackEvent
-          -dontwarn android.window.**
-          -dontwarn android.graphics.Path$**
-          -dontwarn android.graphics.Matrix**
+    # Dontwarn missing Android API 34 classes
+    -dontwarn android.window.BackEvent
+    -dontwarn android.window.**
+    -dontwarn android.graphics.Path$**
+    -dontwarn android.graphics.Matrix**
 
-          # Keep Flutter core classes
-          -keep class io.flutter.** { *; }
-          -dontwarn io.flutter.**
-          -keep class io.flutter.view.** { *; }
-          -keep class io.flutter.embedding.** { *; }
+    # Keep Flutter core classes and view handlers
+    -keep class io.flutter.** { *; }
+    -dontwarn io.flutter.**
+    -keep class io.flutter.view.FlutterView { *; }
+    -keep class io.flutter.view.FlutterView$* { *; }
+    -keep class io.flutter.embedding.** { *; }
 
-          # Keep WebView
-          -keep class android.webkit.** { *; }
-          -dontwarn android.webkit.**
+    # Keep WebView
+    -keep class android.webkit.** { *; }
+    -dontwarn android.webkit.**
 
-          # Keep flutter_inappwebview plugin
-          -keep class com.pichillilorenzo.flutter_inappwebview.** { *; }
-          -dontwarn com.pichillilorenzo.flutter_inappwebview.**
-          -keep class com.pichillilorenzo.** { *; }
-          -dontwarn com.pichillilorenzo.**
+    # Keep flutter_inappwebview plugin - CRITICAL for R8
+    -keep class com.pichillilorenzo.flutter_inappwebview.** { *; }
+    -dontwarn com.pichillilorenzo.flutter_inappwebview.**
+    -keep class com.pichillilorenzo.** { *; }
+    -dontwarn com.pichillilorenzo.**
 
-          # Keep generic Android classes
-          -keep class android.content.** { *; }
-          -keep class android.app.** { *; }
-          -keep class android.os.** { *; }
-          -keep class android.view.** { *; }
+    # Keep Android Window/Gesture classes (API 34+)
+    -dontwarn android.window.BackEvent
+    -keep class android.window.** { *; }
+    -keepclassmembers class io.flutter.view.FlutterView {
+        *** startBackGesture(...);
+        *** cancelBackGesture();
+        *** commitBackGesture();
+    }
 
-          # Keep Serializable classes
-          -keepclassmembers class * implements java.io.Serializable {
-              static final long serialVersionUID;
-              private static final java.io.ObjectStreamField[] serialPersistentFields;
-              private void writeObject(java.io.ObjectOutputStream);
-              private void readObject(java.io.ObjectInputStream);
-              java.lang.Object writeReplace();
-              java.lang.Object readResolve();
-          }
+    # Keep generic Android classes
+    -keep class android.content.** { *; }
+    -keep class android.app.** { *; }
+    -keep class android.os.** { *; }
+    -keep class android.view.** { *; }
 
-          # Keep Parcelable classes
-          -keep class * implements android.os.Parcelable {
-              public static final android.os.Parcelable$Creator *;
-          }
+    # Keep Serializable classes
+    -keepclassmembers class * implements java.io.Serializable {
+        static final long serialVersionUID;
+        private static final java.io.ObjectStreamField[] serialPersistentFields;
+        private void writeObject(java.io.ObjectOutputStream);
+        private void readObject(java.io.ObjectInputStream);
+        java.lang.Object writeReplace();
+        java.lang.Object readResolve();
+    }
 
-          # General attributes
-          -keepattributes *Annotation*
-          -keepattributes Signature
-          -keepattributes SourceFile,LineNumberTable
-          -keepattributes Exceptions
-          -keepattributes InnerClasses
-          -keepattributes Synthetic
-          -keepattributes EnclosingMethod
+    # Keep Parcelable classes
+    -keep class * implements android.os.Parcelable {
+        public static final android.os.Parcelable$Creator *;
+    }
 
-          # Ignore all warnings
-          -ignorewarnings
+    # General attributes
+    -keepattributes *Annotation*
+    -keepattributes Signature
+    -keepattributes SourceFile,LineNumberTable
+    -keepattributes Exceptions
+    -keepattributes InnerClasses
+    -keepattributes Synthetic
+    -keepattributes EnclosingMethod
 
-          # Remove verbose logging
-          -assumenosideeffects class android.util.Log {
-              public static *** d(...);
-              public static *** v(...);
-              public static *** i(...);
-              public static *** w(...);
-          }
+    # Ignore all warnings
+    -ignorewarnings
 
-          # Kotlin specific
-          -keepclassmembers class **$WhenMappings {
-              <fields>;
-          }
-          -keep class kotlin.Metadata { *; }
-          -dontwarn kotlin.**
+    # Remove verbose logging
+    -assumenosideeffects class android.util.Log {
+        public static *** d(...);
+        public static *** v(...);
+        public static *** i(...);
+        public static *** w(...);
+    }
 
-          # Gson
-          -keep class com.google.gson.** { *; }
-          -dontwarn com.google.gson.**
+    # Kotlin specific
+    -keepclassmembers class **$WhenMappings {
+        <fields>;
+    }
+    -keep class kotlin.Metadata { *; }
+    -dontwarn kotlin.**
 
-          # Retrofit
-          -keep class retrofit.** { *; }
-          -dontwarn retrofit.**
+    # Gson, Retrofit, OkHttp
+    -keep class com.google.gson.** { *; }
+    -dontwarn com.google.gson.**
+    -keep class retrofit.** { *; }
+    -dontwarn retrofit.**
+    -keep class okhttp.** { *; }
+    -keep class okhttp3.** { *; }
+    -dontwarn okhttp.**
+    -dontwarn okhttp3.**
 
-          # OkHttp
-          -keep class okhttp.** { *; }
-          -keep class okhttp3.** { *; }
-          -dontwarn okhttp.**
-          -dontwarn okhttp3.**
+    # AndroidX
+    -keep class androidx.** { *; }
+    -dontwarn androidx.**
 
-          # AndroidX
-          -keep class androidx.** { *; }
-          -dontwarn androidx.**
+    # Google Play Services
+    -keep class com.google.** { *; }
+    -dontwarn com.google.**
 
-          # Google Play Services
-          -keep class com.google.** { *; }
-          -dontwarn com.google.**
+    # Range rules
+    -dontwarn com.google.common.**
+    -dontwarn java.lang.invoke.**
+    -dontwarn sun.misc.**
+    EOF
 
-          # Range rules
-          -dontwarn com.google.common.**
-          -dontwarn java.lang.invoke.**
-          -dontwarn sun.misc.**
-          EOF
-
-          echo "ProGuard rules created successfully"
+    echo "ProGuard rules created successfully"
 
       - name: Flutter pub get
         shell: bash
