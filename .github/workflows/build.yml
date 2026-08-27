@@ -252,8 +252,8 @@ jobs:
           PY
 
       - name: Create ProGuard rules for R8
-  shell: bash
-  run: |
+        shell: bash
+        run: |
     set -e
     cd "$PROJECT_ROOT"
 
